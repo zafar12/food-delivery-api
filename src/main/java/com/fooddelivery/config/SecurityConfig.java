@@ -55,6 +55,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/h2-console/**").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/users/register").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/restaurants/**").permitAll() // <-- ADD THIS LINE
                 .anyRequest().authenticated()
             )
             .httpBasic(Customizer.withDefaults());
