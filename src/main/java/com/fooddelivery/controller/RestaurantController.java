@@ -1,17 +1,16 @@
 package com.fooddelivery.controller;
 
-import com.fooddelivery.model.Restaurant;
+import com.fooddelivery.dto.RestaurantDto;
 import com.fooddelivery.service.RestaurantService;
+import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.security.Principal;
-import java.util.List;
-
-/**
- * REST Controller for browsing and managing restaurants.
- */
 @RestController
 @RequestMapping("/api/restaurants")
 public class RestaurantController {
@@ -23,39 +22,33 @@ public class RestaurantController {
     }
 
     @GetMapping
-    public ResponseEntity<List<Restaurant>> getAllRestaurants() {
-        return ResponseEntity.ok(restaurantService.getAllRestaurants());
+    public ResponseEntity<Page<RestaurantDto.Response>> getAllRestaurants(
+            @RequestParam(name="page", defaultValue = "0") int page,
+            @RequestParam(name="size",defaultValue = "10") int size) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("name").ascending());
+        return ResponseEntity.ok(restaurantService.getAllRestaurants(pageable));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<RestaurantDto.Response> getRestaurantById(@PathVariable("id") Long id) {
+        return ResponseEntity.ok(restaurantService.getRestaurantById(id));
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('RESTAURANT_OWNER', 'ADMINISTRATOR')")
-    public ResponseEntity<Restaurant> createRestaurant(@RequestBody RestaurantRequest request, Principal principal) {
-        Restaurant restaurant = restaurantService.createRestaurant(request.getName(), request.getDescription(), principal.getName());
-        return ResponseEntity.ok(restaurant);
+    public ResponseEntity<RestaurantDto.Response> createRestaurant(@Valid @RequestBody RestaurantDto.Request request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(restaurantService.createRestaurant(request));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('RESTAURANT_OWNER', 'ADMINISTRATOR')")
-    public ResponseEntity<Restaurant> updateRestaurant(@PathVariable("id") Long id, @RequestBody RestaurantRequest request, Principal principal) {
-        Restaurant updated = restaurantService.updateRestaurant(id, request.getName(), request.getDescription(), principal.getName());
-        return ResponseEntity.ok(updated);
+    public ResponseEntity<RestaurantDto.Response> updateRestaurant(
+            @PathVariable("id") Long id,
+            @Valid @RequestBody RestaurantDto.Request request) {
+        return ResponseEntity.ok(restaurantService.updateRestaurant(id, request));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('RESTAURANT_OWNER', 'ADMINISTRATOR')")
-    public ResponseEntity<Void> deleteRestaurant(@PathVariable("id") Long id, Principal principal) {
-        restaurantService.deleteRestaurant(id, principal.getName());
+    public ResponseEntity<Void> deleteRestaurant(@PathVariable("id") Long id) {
+        restaurantService.deleteRestaurant(id);
         return ResponseEntity.noContent().build();
-    }
-
-    // DTO for Request Payload
-    public static class RestaurantRequest {
-        private String name;
-        private String description;
-
-        public String getName() { return name; }
-        public void setName(String name) { this.name = name; }
-        public String getDescription() { return description; }
-        public void setDescription(String description) { this.description = description; }
     }
 }

@@ -1,6 +1,6 @@
 package com.fooddelivery.config;
 
-import com.fooddelivery.model.User;
+import com.fooddelivery.entity.User;
 import com.fooddelivery.repository.UserRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -46,6 +46,7 @@ public class SecurityConfig {
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
+
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {

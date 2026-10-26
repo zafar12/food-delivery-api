@@ -1,4 +1,4 @@
-package com.fooddelivery.model;
+package com.fooddelivery.entity;
 
 import jakarta.persistence.*;
 

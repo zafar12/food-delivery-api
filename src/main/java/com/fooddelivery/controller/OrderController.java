@@ -1,18 +1,17 @@
 package com.fooddelivery.controller;
 
-
-import com.fooddelivery.model.Order;
+import com.fooddelivery.dto.OrderDto;
+import com.fooddelivery.entity.Order;
 import com.fooddelivery.service.OrderService;
+import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.security.Principal;
-import java.util.List;
-
-/**
- * REST Controller for placing orders and managing order status updates.
- */
 @RestController
 @RequestMapping("/api/orders")
 public class OrderController {
@@ -23,43 +22,28 @@ public class OrderController {
         this.orderService = orderService;
     }
 
-    @PostMapping
-    @PreAuthorize("hasRole('CUSTOMER')")
-    public ResponseEntity<Order> placeOrder(@RequestBody OrderRequest request, Principal principal) {
-        Order order = orderService.placeOrder(
-                principal.getName(),
-                request.getRestaurantId(),
-                request.getMealIds(),
-                request.getCustomTip(),
-                request.getCouponCode()
-        );
-        return ResponseEntity.ok(order);
+    @GetMapping
+    public ResponseEntity<Page<OrderDto.Response>> getAllOrders(
+    		@RequestParam(name="page", defaultValue = "0") int page,
+            @RequestParam(name="size",defaultValue = "10") int size) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("id").descending());
+        return ResponseEntity.ok(orderService.getAllOrders(pageable));
     }
 
-    @GetMapping
-    public ResponseEntity<List<Order>> getOrders(Principal principal) {
-        return ResponseEntity.ok(orderService.getOrdersForUser(principal.getName()));
+    @GetMapping("/{id}")
+    public ResponseEntity<OrderDto.Response> getOrderById(@PathVariable("id") Long id) {
+        return ResponseEntity.ok(orderService.getOrderById(id));
+    }
+
+    @PostMapping
+    public ResponseEntity<OrderDto.Response> placeOrder(@Valid @RequestBody OrderDto.Request request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(orderService.placeOrder(request));
     }
 
     @PatchMapping("/{id}/status")
-    public ResponseEntity<Order> updateStatus(@PathVariable("id") Long id, @RequestParam Order.OrderStatus status, Principal principal) {
-        Order order = orderService.updateOrderStatus(id, status, principal.getName());
-        return ResponseEntity.ok(order);
-    }
-
-    public static class OrderRequest {
-        private Long restaurantId;
-        private List<Long> mealIds;
-        private Double customTip;
-        private String couponCode;
-
-        public Long getRestaurantId() { return restaurantId; }
-        public void setRestaurantId(Long restaurantId) { this.restaurantId = restaurantId; }
-        public List<Long> getMealIds() { return mealIds; }
-        public void setMealIds(List<Long> mealIds) { this.mealIds = mealIds; }
-        public Double getCustomTip() { return customTip; }
-        public void setCustomTip(Double customTip) { this.customTip = customTip; }
-        public String getCouponCode() { return couponCode; }
-        public void setCouponCode(String couponCode) { this.couponCode = couponCode; }
+    public ResponseEntity<OrderDto.Response> updateOrderStatus(
+            @PathVariable("id") Long id,
+            @RequestParam("status") Order.OrderStatus status) {
+        return ResponseEntity.ok(orderService.updateOrderStatus(id, status));
     }
 }

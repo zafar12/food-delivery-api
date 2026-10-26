@@ -1,66 +1,52 @@
 package com.fooddelivery.controller;
 
-import com.fooddelivery.model.User;
-import com.fooddelivery.repository.UserRepository;
+import com.fooddelivery.dto.UserDto;
+import com.fooddelivery.service.UserService;
+import jakarta.validation.Valid;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-
-/**
- * REST Controller for user registration and administrative user management.
- */
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
 
-    private final UserRepository userRepository;
-    private final PasswordEncoder passwordEncoder;
+    private final UserService userService;
 
-    public UserController(UserRepository userRepository, PasswordEncoder passwordEncoder) {
-        this.userRepository = userRepository;
-        this.passwordEncoder = passwordEncoder;
-    }
-
-    @PostMapping("/register")
-    public ResponseEntity<User> registerUser(@RequestBody User user) {
-        if (userRepository.existsByEmail(user.getEmail())) {
-            throw new RuntimeException("Email already registered");
-        }
-        user.setPassword(passwordEncoder.encode(user.getPassword()));
-        user.setBlocked(false);
-        user.setImmutableAdmin(false);
-        User saved = userRepository.save(user);
-        return ResponseEntity.ok(saved);
+    public UserController(UserService userService) {
+        this.userService = userService;
     }
 
     @GetMapping
-    @PreAuthorize("hasRole('ADMINISTRATOR')")
-    public ResponseEntity<List<User>> getAllUsers() {
-        return ResponseEntity.ok(userRepository.findAll());
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Page<UserDto.Response>> getAllUsers(
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "10") int size) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("name").ascending());
+        return ResponseEntity.ok(userService.getAllUsers(pageable));
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<UserDto.Response> registerUser(@Valid @RequestBody UserDto.Request request) {
+    	UserDto.Response createdUser = userService.createUser(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(createdUser);
     }
 
     @PutMapping("/{id}/block")
-    @PreAuthorize("hasRole('ADMINISTRATOR')")
-    public ResponseEntity<User> toggleBlockUser(@PathVariable("id") Long id) {
-        User user = userRepository.findById(id).orElseThrow(() -> new RuntimeException("User not found"));
-        if (user.isImmutableAdmin()) {
-            throw new RuntimeException("Cannot block built-in administrator account");
-        }
-        user.setBlocked(!user.isBlocked());
-        return ResponseEntity.ok(userRepository.save(user));
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<UserDto.Response> toggleBlockUser(@PathVariable("id") Long id) {
+        return ResponseEntity.ok(userService.toggleBlockUser(id));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasRole('ADMINISTRATOR')")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> deleteUser(@PathVariable("id") Long id) {
-        User user = userRepository.findById(id).orElseThrow(() -> new RuntimeException("User not found"));
-        if (user.isImmutableAdmin()) {
-            throw new RuntimeException("Cannot delete built-in administrator account");
-        }
-        userRepository.delete(user);
+        userService.deleteUser(id);
         return ResponseEntity.noContent().build();
     }
 }

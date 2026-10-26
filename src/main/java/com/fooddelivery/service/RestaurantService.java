@@ -1,18 +1,20 @@
 package com.fooddelivery.service;
 
-import com.fooddelivery.model.Restaurant;
-import com.fooddelivery.model.User;
+import com.fooddelivery.dto.RestaurantDto;
+import com.fooddelivery.entity.Restaurant;
+import com.fooddelivery.entity.User;
 import com.fooddelivery.repository.RestaurantRepository;
 import com.fooddelivery.repository.UserRepository;
+import jakarta.persistence.EntityNotFoundException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
-
-/**
- * Service handling business logic for restaurant management.
- */
 @Service
+@Transactional(readOnly = true)
 public class RestaurantService {
 
     private final RestaurantRepository restaurantRepository;
@@ -23,68 +25,79 @@ public class RestaurantService {
         this.userRepository = userRepository;
     }
 
-    /**
-     * Creates a new restaurant owned by the specified restaurant owner or admin.
-     */
+    public Page<RestaurantDto.Response> getAllRestaurants(Pageable pageable) {
+        return restaurantRepository.findAll(pageable).map(this::mapToResponse);
+    }
+
+    public RestaurantDto.Response getRestaurantById(Long id) {
+        Restaurant restaurant = restaurantRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Restaurant not found with ID: " + id));
+        return mapToResponse(restaurant);
+    }
+
     @Transactional
-    public Restaurant createRestaurant(String name, String description, String ownerEmail) {
-        User owner = userRepository.findByEmail(ownerEmail)
-                .orElseThrow(() -> new RuntimeException("Owner not found"));
+    public RestaurantDto.Response createRestaurant(RestaurantDto.Request request) {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        User owner = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("Customer not found with email: " + email));
 
         Restaurant restaurant = new Restaurant();
-        restaurant.setName(name);
-        restaurant.setDescription(description);
+        restaurant.setName(request.getName());
+        restaurant.setDescription(request.getDescription());
         restaurant.setOwner(owner);
 
-        return restaurantRepository.save(restaurant);
+        Restaurant saved = restaurantRepository.save(restaurant);
+        return mapToResponse(saved);
     }
 
-    /**
-     * Retrieves all restaurants available in the system.
-     */
-    public List<Restaurant> getAllRestaurants() {
-        return restaurantRepository.findAll();
-    }
-
-    /**
-     * Retrieves a restaurant by its unique identifier.
-     */
-    public Restaurant getRestaurantById(Long id) {
-        return restaurantRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Restaurant not found with id: " + id));
-    }
-
-    /**
-     * Updates an existing restaurant's details.
-     */
     @Transactional
-    public Restaurant updateRestaurant(Long id, String name, String description, String userEmail) {
-        Restaurant restaurant = getRestaurantById(id);
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+    public RestaurantDto.Response updateRestaurant(Long id, RestaurantDto.Request request) {
+        Restaurant restaurant = restaurantRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Restaurant not found with ID: " + id));
 
-        if (user.getRole() != User.Role.ADMINISTRATOR && !restaurant.getOwner().getId().equals(user.getId())) {
-            throw new RuntimeException("Unauthorized to update this restaurant");
+        // Object-level authorization check (IDOR prevention)
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("Customer not found with email: " + email));
+
+        if (currentUser.getRole() == User.Role.RESTAURANT_OWNER) {
+            if (!restaurant.getOwner().getId().equals(currentUser.getId())) {
+                throw new AccessDeniedException("You do not own this restaurant.");
+            }
         }
 
-        restaurant.setName(name);
-        restaurant.setDescription(description);
-        return restaurantRepository.save(restaurant);
+        restaurant.setName(request.getName());
+        restaurant.setDescription(request.getDescription());
+
+        Restaurant updated = restaurantRepository.save(restaurant);
+        return mapToResponse(updated);
     }
 
-    /**
-     * Deletes a restaurant by ID.
-     */
     @Transactional
-    public void deleteRestaurant(Long id, String userEmail) {
-        Restaurant restaurant = getRestaurantById(id);
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+    public void deleteRestaurant(Long id) {
+        Restaurant restaurant = restaurantRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Restaurant not found with ID: " + id));
 
-        if (user.getRole() != User.Role.ADMINISTRATOR && !restaurant.getOwner().getId().equals(user.getId())) {
-            throw new RuntimeException("Unauthorized to delete this restaurant");
+        // Object-level authorization check (IDOR prevention)
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("Customer not found with email: " + email));
+
+        if (currentUser.getRole() == User.Role.RESTAURANT_OWNER) {
+            if (!restaurant.getOwner().getId().equals(currentUser.getId())) {
+                throw new AccessDeniedException("You do not own this restaurant.");
+            }
         }
 
         restaurantRepository.delete(restaurant);
+    }
+
+    private RestaurantDto.Response mapToResponse(Restaurant restaurant) {
+        return new RestaurantDto.Response(
+                restaurant.getId(),
+                restaurant.getName(),
+                restaurant.getDescription(),
+                restaurant.getOwner() != null ? restaurant.getOwner().getEmail() : null
+        );
     }
 }

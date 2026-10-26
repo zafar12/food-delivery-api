@@ -1,157 +1,159 @@
 package com.fooddelivery.service;
 
-import com.fooddelivery.model.*;
-import com.fooddelivery.repository.*;
+import com.fooddelivery.dto.MealDto;
+import com.fooddelivery.dto.OrderDto;
+import com.fooddelivery.entity.Coupon;
+import com.fooddelivery.entity.Meal;
+import com.fooddelivery.entity.Order;
+import com.fooddelivery.entity.Restaurant;
+import com.fooddelivery.entity.User;
+import com.fooddelivery.repository.MealRepository;
+import com.fooddelivery.repository.OrderRepository;
+import com.fooddelivery.repository.RestaurantRepository;
+import com.fooddelivery.repository.UserRepository;
+import jakarta.persistence.EntityNotFoundException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
-/**
- * Handles order placement, price calculation, coupon discounts, and strict status progression rules.
- */
 @Service
+@Transactional(readOnly = true)
 public class OrderService {
 
-    private final OrderRepository orderRepository;
+	private final OrderRepository orderRepository;
+    private final UserRepository userRepository;
     private final RestaurantRepository restaurantRepository;
     private final MealRepository mealRepository;
-    private final CouponRepository couponRepository;
-    private final UserRepository userRepository;
+    private final CouponService couponService; 
 
-    public OrderService(OrderRepository orderRepository, RestaurantRepository restaurantRepository,
-                        MealRepository mealRepository, CouponRepository couponRepository, UserRepository userRepository) {
+    public OrderService(OrderRepository orderRepository, UserRepository userRepository,
+                        RestaurantRepository restaurantRepository, MealRepository mealRepository,
+                        CouponService couponService) {
         this.orderRepository = orderRepository;
+        this.userRepository = userRepository;
         this.restaurantRepository = restaurantRepository;
         this.mealRepository = mealRepository;
-        this.couponRepository = couponRepository;
-        this.userRepository = userRepository;
+        this.couponService = couponService;
+    }
+    
+    public Page<OrderDto.Response> getAllOrders(Pageable pageable) {
+        return orderRepository.findAll(pageable).map(this::mapToResponse);
     }
 
-    /**
-     * Places a new order for a customer at a single restaurant with optional tips and coupons.
-     */
+    public OrderDto.Response getOrderById(Long id) {
+        Order order = orderRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found with ID: " + id));
+        
+        validateOrderAccess(order);
+        return mapToResponse(order);
+    }
+
     @Transactional
-    public Order placeOrder(String customerEmail, Long restaurantId, List<Long> mealIds, Double customTip, String couponCode) {
-        User customer = userRepository.findByEmail(customerEmail)
-                .orElseThrow(() -> new RuntimeException("Customer not found"));
+    public OrderDto.Response placeOrder(OrderDto.Request request) {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        
+        User customer = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("Customer not found with email: " + email));
 
-        Restaurant restaurant = restaurantRepository.findById(restaurantId)
-                .orElseThrow(() -> new RuntimeException("Restaurant not found"));
+        Restaurant restaurant = restaurantRepository.findById(request.getRestaurantId())
+                .orElseThrow(() -> new EntityNotFoundException("Restaurant not found with ID: " + request.getRestaurantId()));
 
-        List<Meal> meals = mealRepository.findAllById(mealIds);
+        List<Meal> meals = mealRepository.findAllById(request.getMealIds());
         if (meals.isEmpty()) {
-            throw new RuntimeException("Order must contain at least one meal");
+            throw new IllegalArgumentException("At least one valid meal must be selected");
         }
 
-        // Validate single restaurant rule
         for (Meal meal : meals) {
-            if (!meal.getRestaurant().getId().equals(restaurantId)) {
-                throw new RuntimeException("All meals in an order must belong to the same restaurant");
+            if (!meal.getRestaurant().getId().equals(restaurant.getId())) {
+                throw new IllegalArgumentException("Meal ID " + meal.getId() + " does not belong to restaurant " + restaurant.getId());
             }
         }
 
-        double mealsTotal = meals.stream().mapToDouble(Meal::getPrice).sum();
-        double discount = 0.0;
+        // 1. Calculate raw subtotal
+        Double subtotal = meals.stream()
+                .mapToDouble(Meal::getPrice)
+                .sum();
 
-        if (couponCode != null && !couponCode.isBlank()) {
-            Coupon coupon = couponRepository.findByCode(couponCode)
-                    .orElseThrow(() -> new RuntimeException("Invalid coupon code"));
-            discount = (mealsTotal * coupon.getDiscountPercentage()) / 100.0;
-        }
+        // 2. Validate coupon and calculate discount amount
+        Coupon coupon = couponService.validateAndGetCoupon(request.getCouponCode(), subtotal);
+        Double discountAmount = couponService.calculateDiscount(subtotal, coupon);
 
-        double tip = customTip != null ? customTip : 0.0;
-        double totalAmount = (mealsTotal - discount) + tip;
+        // 3. Final total price calculation
+        Double totalPrice = Math.max(0.0, subtotal - discountAmount);
 
         Order order = new Order();
         order.setCustomer(customer);
         order.setRestaurant(restaurant);
         order.setMeals(meals);
-        order.setOrderDate(LocalDateTime.now());
-        order.setTotalAmount(totalAmount);
-        order.setCustomTipAmount(tip);
-        order.setCouponCode(couponCode);
-        order.setDiscountApplied(discount);
+        // Note: You can store discountAmount/subtotal fields on your Order entity if desired, 
+        // or just persist the final totalPrice. Here we store totalPrice.
+        order.setTotalPrice(totalPrice);
         order.setStatus(Order.OrderStatus.PLACED);
 
-        OrderStatusHistory history = new OrderStatusHistory();
-        history.setOrder(order);
-        history.setStatus(Order.OrderStatus.PLACED);
-        history.setChangedAt(LocalDateTime.now());
-
-        order.getStatusHistories().add(history);
-        return orderRepository.save(order);
+        Order saved = orderRepository.save(order);
+        return mapToResponse(saved, subtotal, discountAmount);
     }
 
-    /**
-     * Updates an order's status following state machine rules and permission validations.
-     */
     @Transactional
-    public Order updateOrderStatus(Long orderId, Order.OrderStatus newStatus, String userEmail) {
+    public OrderDto.Response updateOrderStatus(Long orderId, Order.OrderStatus newStatus) {
         Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new EntityNotFoundException("Order not found with ID: " + orderId));
 
-        validateStateTransition(order, newStatus, user);
+        validateOrderAccess(order);
 
         order.setStatus(newStatus);
-        OrderStatusHistory history = new OrderStatusHistory();
-        history.setOrder(order);
-        history.setStatus(newStatus);
-        history.setChangedAt(LocalDateTime.now());
-        order.getStatusHistories().add(history);
-
-        return orderRepository.save(order);
+        return mapToResponse(orderRepository.save(order));
     }
 
-    /**
-     * Retrieves orders for a customer, restaurant owner, or admin.
-     */
-    public List<Order> getOrdersForUser(String userEmail) {
-        User user = userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+    private void validateOrderAccess(Order order) {
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        User currentUser = userRepository.findByEmail(email)
+                .orElseThrow(() -> new EntityNotFoundException("Current authenticated user not found"));
 
-        if (user.getRole() == User.Role.ADMINISTRATOR) {
-            return orderRepository.findAll();
-        } else if (user.getRole() == User.Role.CUSTOMER) {
-            return orderRepository.findByCustomerId(user.getId());
-        } else if (user.getRole() == User.Role.RESTAURANT_OWNER) {
-            List<Restaurant> restaurants = restaurantRepository.findByOwnerId(user.getId());
-            return restaurants.stream()
-                    .flatMap(r -> orderRepository.findByRestaurantId(r.getId()).stream())
-                    .distinct()
-                    .toList();
+        if (currentUser.getRole() == User.Role.RESTAURANT_OWNER) {
+            if (order.getRestaurant().getOwner() == null || 
+                !order.getRestaurant().getOwner().getId().equals(currentUser.getId())) {
+                throw new AccessDeniedException("You do not own the restaurant associated with this order.");
+            }
+        } else if (currentUser.getRole() == User.Role.CUSTOMER) {
+            if (order.getCustomer() == null || 
+                !order.getCustomer().getId().equals(currentUser.getId())) {
+                throw new AccessDeniedException("You are not authorized to view or modify this order.");
+            }
         }
-        return List.of();
+    }
+    
+    private OrderDto.Response mapToResponse(Order order) {
+        // Fallback for general lookups where subtotal/discount aren't independently tracked; for flow order is not being placed 
+        Double subtotal = order.getTotalPrice();
+        return mapToResponse(order, subtotal, 0.0);
     }
 
-    /**
-     * Validates permitted transitions between order statuses.
-     */
-    private void validateStateTransition(Order order, Order.OrderStatus newStatus, User user) {
-        boolean isCustomer = user.getId().equals(order.getCustomer().getId());
-        boolean isOwner = user.getId().equals(order.getRestaurant().getOwner().getId());
-        boolean isAdmin = user.getRole() == User.Role.ADMINISTRATOR;
+    private OrderDto.Response mapToResponse(Order order, Double subtotal, Double discountAmount) {
+        List<MealDto.Response> mealResponses = order.getMeals().stream()
+                .map(m -> new MealDto.Response(
+                        m.getId(), 
+                        m.getName(), 
+                        m.getDescription(), 
+                        m.getPrice(), 
+                        m.getRestaurant() != null ? m.getRestaurant().getId() : null
+                ))
+                .toList();
 
-        Order.OrderStatus current = order.getStatus();
-
-        if (newStatus == Order.OrderStatus.CANCELED) {
-            if (!isCustomer && !isOwner && !isAdmin) throw new RuntimeException("Unauthorized to cancel order");
-            if (current != Order.OrderStatus.PLACED) throw new RuntimeException("Order can only be canceled when PLACED");
-        } else if (newStatus == Order.OrderStatus.PROCESSING) {
-            if (!isOwner && !isAdmin) throw new RuntimeException("Only restaurant owner can process orders");
-            if (current != Order.OrderStatus.PLACED) throw new RuntimeException("Invalid status flow");
-        } else if (newStatus == Order.OrderStatus.IN_ROUTE) {
-            if (!isOwner && !isAdmin) throw new RuntimeException("Only restaurant owner can mark in route");
-            if (current != Order.OrderStatus.PROCESSING) throw new RuntimeException("Invalid status flow");
-        } else if (newStatus == Order.OrderStatus.DELIVERED) {
-            if (!isOwner && !isAdmin) throw new RuntimeException("Only restaurant owner can mark delivered");
-            if (current != Order.OrderStatus.IN_ROUTE) throw new RuntimeException("Invalid status flow");
-        } else if (newStatus == Order.OrderStatus.RECEIVED) {
-            if (!isCustomer && !isAdmin) throw new RuntimeException("Only customer can mark received");
-            if (current != Order.OrderStatus.DELIVERED) throw new RuntimeException("Order must be delivered first");
-        }
+        return new OrderDto.Response(
+                order.getId(),
+                order.getCustomer() != null ? order.getCustomer().getEmail() : null,
+                order.getRestaurant() != null ? order.getRestaurant().getName() : null,
+                order.getStatus(),
+                subtotal,
+                discountAmount,
+                order.getTotalPrice(),
+                mealResponses
+        );
     }
 }
