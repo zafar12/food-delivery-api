@@ -18,7 +18,7 @@ class FoodDeliveryApiApplicationTests {
     private MockMvc mockMvc;
 
     @Test
-    @WithMockUser(username = "admin@toptal.com", roles = {"ADMINISTRATOR"})
+    @WithMockUser(username = "admin@toptal.com", roles = {"ADMIN"})
     void testAdminCanAccessUsersEndpoint() throws Exception {
         mockMvc.perform(get("/api/users"))
                 .andExpect(status().isOk());
