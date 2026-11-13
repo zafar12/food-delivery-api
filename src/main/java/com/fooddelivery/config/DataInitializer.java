@@ -13,7 +13,7 @@ public class DataInitializer {
     @Bean
     CommandLineRunner initAdmin(UserRepository userRepository, PasswordEncoder passwordEncoder) {
         return args -> {
-            String adminEmail = "admin@toptal.com";
+            String adminEmail = "admin@zafar.com";
             if (!userRepository.existsByEmail(adminEmail)) {
                 User admin = new User();
                         admin.setName("Admin");
